@@ -1,11 +1,11 @@
 [package]
 name          = "cbor-codec"
-version       = "0.4.2"
+version       = "0.5.0"
 authors       = ["Toralf Wittner <tw@dtex.org>"]
 license       = "MPL-2.0"
 description   = "CBOR Codec implementation"
-repository    = "https://github.com/twittner/cbor-codec"
-documentation = "https://twittner.github.io/cbor-codec/doc/cbor/"
+repository    = "https://gitlab.com/twittner/cbor-codec"
+documentation = "https://twittner.gitlab.io/cbor-codec/doc/cbor/"
 keywords      = ["cbor", "encoding", "binary"]
 
 [lib]

@@ -1,3 +1,7 @@
+0.5.0
+-----
+- Update `byteorder` dependency.
+
 0.4.2
 -----
 - Bugfix release (fixes indefinite object/array encoding).
