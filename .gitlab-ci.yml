@@ -20,8 +20,9 @@ pages:
   stage: deploy
   script:
     - cargo doc
+    - mv target/doc public
   artifacts:
     paths:
-      - target/doc
+      - public
   only:
     - master
