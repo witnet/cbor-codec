@@ -1,6 +1,11 @@
 before_script:
   - "curl -sSf https://static.rust-lang.org/rustup.sh | sh -s -- --channel=nightly --disable-sudo --yes"
 
+stages:
+  - test
+  - bench
+  - deploy
+
 test_job:
   stage: test
   script:
