@@ -87,7 +87,9 @@ pub enum EncodeError {
     InvalidSimpleValue(Simple),
     /// Certain values (e.g. `Value::Break`) are not legal to encode as
     /// independent units. Attempting to do so will trigger this error.
-    InvalidValue(Value)
+    InvalidValue(Value),
+    /// Some other error.
+    Other(Box<Error + Send + Sync>)
 }
 
 impl fmt::Display for EncodeError {
@@ -96,19 +98,27 @@ impl fmt::Display for EncodeError {
             EncodeError::IoError(ref e)            => write!(f, "EncodeError: I/O error: {}", *e),
             EncodeError::UnexpectedEOF             => write!(f, "EncodeError: unexpected end-of-file"),
             EncodeError::InvalidValue(ref v)       => write!(f, "EncodeError: invalid value {:?}", v),
-            EncodeError::InvalidSimpleValue(ref s) => write!(f, "EncodeError: invalid simple value {:?}", s)
+            EncodeError::InvalidSimpleValue(ref s) => write!(f, "EncodeError: invalid simple value {:?}", s),
+            EncodeError::Other(ref e)              => write!(f, "EncodeError: other error: {}", e)
         }
     }
 }
 
 impl Error for EncodeError {
     fn description(&self) -> &str {
-        "EncodeError"
+        match *self {
+            EncodeError::IoError(_)            => "i/o error",
+            EncodeError::UnexpectedEOF         => "unexpected eof",
+            EncodeError::InvalidValue(_)       => "invalid value",
+            EncodeError::InvalidSimpleValue(_) => "invalid simple value",
+            EncodeError::Other(_)              => "other error"
+        }
     }
 
     fn cause(&self) -> Option<&Error> {
         match *self {
             EncodeError::IoError(ref e) => Some(e),
+            EncodeError::Other(ref e)   => Some(&**e),
             _                           => None
         }
     }

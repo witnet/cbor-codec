@@ -43,3 +43,20 @@ pub fn as_i64(x: &Value) -> Option<i64> {
         _             => None
     }
 }
+
+pub fn as_f64(x: &Value) -> Option<f64> {
+    match *x {
+        Value::U8(n)  => Some(n as f64),
+        Value::U16(n) => Some(n as f64),
+        Value::U32(n) => Some(n as f64),
+        Value::U64(n) => Some(n as f64),
+        Value::I8(n)  => Some(n as f64),
+        Value::I16(n) => Some(n as f64),
+        Value::I32(n) => Some(n as f64),
+        Value::I64(n) => Some(n as f64),
+        Value::F32(n) => Some(n as f64),
+        Value::F64(n) => Some(n),
+        _             => None
+    }
+}
+

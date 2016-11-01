@@ -6,19 +6,34 @@
 use cbor::{Config, GenericDecoder};
 use cbor::value::{Int, Key, Text, Value};
 use rustc_serialize::base64::FromBase64;
-use serde_json as json;
-use serde_json::de::from_reader;
+use json::{Json, Decoder, FromJson, DecodeResult};
+use json::decoder::ReadIter;
 use std::{f32, f64, i8, i16, i32, i64, u64};
 use std::fs::File;
 use util;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct TestVector {
-    cbor: String,
-    hex: String,
-    roundtrip: bool,
-    decoded: Option<json::Value>,
-    diagnostic: Option<json::Value>
+    cbor:       String,
+    hex:        String,
+    roundtrip:  bool,
+    decoded:    Option<Json>,
+    diagnostic: Option<Json>
+}
+
+impl FromJson for TestVector {
+    fn decode<I: Iterator<Item=char>>(d: &mut Decoder<I>) -> DecodeResult<TestVector> {
+        object! {
+            let decoder = d;
+            TestVector {
+                cbor:       req. "cbor"       => d.string(),
+                hex:        req. "hex"        => d.string(),
+                roundtrip:  req. "roundtrip"  => d.bool(),
+                decoded:    opt. "decoded"    => d.from_json(),
+                diagnostic: opt. "diagnostic" => d.from_json()
+            }
+        }
+    }
 }
 
 #[test]
@@ -41,8 +56,8 @@ fn int_min_max() {
 
 #[test]
 fn test_all() {
-    let reader = File::open("tests/appendix_a.json").unwrap();
-    let test_vectors: Vec<TestVector> = from_reader(reader).unwrap();
+    let iter = ReadIter::new(File::open("tests/appendix_a.json").unwrap());
+    let test_vectors: Vec<TestVector> = Decoder::default(iter).from_json().unwrap();
     for v in test_vectors {
         let raw = v.cbor.from_base64().unwrap();
         let mut dec = GenericDecoder::new(Config::default(), &raw[..]);
@@ -53,7 +68,7 @@ fn test_all() {
             }
             continue
         }
-        if let Some(json::Value::String(ref x)) = v.diagnostic {
+        if let Some(Json::String(ref x)) = v.diagnostic {
             if !diag(&x, &val) {
                 panic!("{}: {:?} <> {:?}", v.hex, x, val)
             }
@@ -61,35 +76,36 @@ fn test_all() {
     }
 }
 
-// Note [floating_point]
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// There is no agreement between serde's floating point parser and us.
-// According to manual checks comparing the byte representation we conclude
-// for now that we are not to blame for this. As a temporary measure all
-// floating point comparisons are disabled in this test. The decoder module
-// contains some floating point tests.
-fn eq(a: &json::Value, b: &Value) -> bool {
+fn eq(a: &Json, b: &Value) -> bool {
     match (a, b) {
-        (&json::Value::Null, &Value::Null) => true,
-        (&json::Value::Bool(x), &Value::Bool(y)) => x == y,
-        (&json::Value::String(ref x), &Value::Text(Text::Text(ref y))) => x == y,
-        (&json::Value::String(ref x), &Value::Text(Text::Chunks(ref y))) => {
+        (&Json::Null,          &Value::Null) => true,
+        (&Json::Bool(x),       &Value::Bool(y)) => x == y,
+        (&Json::String(ref x), &Value::Text(Text::Text(ref y))) => x == y,
+        (&Json::String(ref x), &Value::Text(Text::Chunks(ref y))) => {
             let mut s = String::new();
             for c in y {
                 s.push_str(c)
             }
             x == &s
         }
-        (&json::Value::I64(x), y) => util::as_i64(y).map(|i| x == i).unwrap_or(false),
-        (&json::Value::U64(x), y) => util::as_u64(y).map(|i| x == i).unwrap_or(false),
-        (&json::Value::F64(_), &Value::F32(_)) => true, // See note [floating_point]
-        (&json::Value::F64(_), &Value::F64(_)) => true, // See note [floating_point]
-        (&json::Value::Array(ref x), &Value::Array(ref y)) =>
+        (&Json::Number(x), y) =>
+            util::as_f64(y)
+                .map(|i| (x - i).abs() < f64::EPSILON)
+                .unwrap_or(false),
+        (&Json::Array(ref x), &Value::Array(ref y)) =>
             x.iter().zip(y.iter()).all(|(xi, yi)| eq(xi, yi)),
-        (&json::Value::Object(ref x), &Value::Map(ref y)) =>
-            x.iter().zip(y.iter()).all(|((kx, vx), (ky, vy))| {
-                eq(&json::Value::String(kx.clone()), &to_value(ky.clone())) && eq(vx, vy)
-            }),
+        (&Json::Object(ref x), &Value::Map(ref y)) => {
+            for (k, v) in x {
+                if let Some(w) = y.get(&Key::Text(Text::Text(k.clone()))) {
+                    if !eq(v, w) {
+                        return false
+                    }
+                } else {
+                    return false
+                }
+            }
+            true
+        }
         _ => false
     }
 }
@@ -109,14 +125,5 @@ fn diag(a: &str, b: &Value) -> bool {
         ("NaN",       &Value::F64(x)) => x.is_nan(),
         ("undefined", &Value::Undefined) => true,
         _ => true // See note [diagnostic]
-    }
-}
-
-fn to_value(k: Key) -> Value {
-    match k {
-        Key::Bool(x)  => Value::Bool(x),
-        Key::Bytes(x) => Value::Bytes(x),
-        Key::Int(x)   => Value::Int(x),
-        Key::Text(x)  => Value::Text(x),
     }
 }

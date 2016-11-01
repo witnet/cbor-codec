@@ -1,3 +1,9 @@
+0.6.0
+-----
+- Add `Other` constructor to `EncodeError` end `DecodeError`.
+- Change `DecodeError::DuplicateKey` to contain the key value.
+- Update tests.
+
 0.5.0
 -----
 - Update `byteorder` dependency.
