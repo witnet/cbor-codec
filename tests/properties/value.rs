@@ -51,7 +51,7 @@ pub fn eq(a: &Value, b: &Value) -> bool {
         (&Value::F32(x), &Value::F32(y))             => x.is_nan() && y.is_nan() || x == y,
         (&Value::F64(x), &Value::F64(y))             => x.is_nan() && y.is_nan() || x == y,
         (&Value::Map(ref x), &Value::Map(ref y))     => eq_map(x, y),
-        (&Value::Tagged(ta, box ref x), &Value::Tagged(tb, box ref y)) => ta == tb && eq(x, y),
+        (&Value::Tagged(ta, ref x), &Value::Tagged(tb, ref y)) => ta == tb && eq(&*x, &*y),
         _ => as_u64(a) == as_u64(b) || as_i64(a) == as_i64(b)
     }
 }

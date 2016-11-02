@@ -89,11 +89,10 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use slice::{ReadSlice, ReadSliceError};
 use std::collections::{BTreeMap, LinkedList};
-use std::cmp::Eq;
 use std::str::{from_utf8, Utf8Error};
 use std::error::Error;
 use std::f32;
-use std::fmt::{self, Debug};
+use std::fmt;
 use std::{i8, i16, i32, i64};
 use std::io;
 use std::string;
@@ -159,7 +158,7 @@ pub type DecodeResult<A> = Result<A, DecodeError>;
 #[derive(Debug)]
 pub enum DecodeError {
     /// An object contains the same key multiple times
-    DuplicateKey(Box<Debug>),
+    DuplicateKey(Key),
     /// The signed integer is greater that its max value
     IntOverflow(u64),
     /// The decoded `Value` can not serve as a `Key` in an object
@@ -180,7 +179,9 @@ pub enum DecodeError {
     UnexpectedType { datatype: Type, info: u8 },
     /// A break was encountered at some unexpected point while
     /// decoding an indefinite object.
-    UnexpectedBreak
+    UnexpectedBreak,
+    /// Some other error.
+    Other(Box<Error + Send + Sync>)
 }
 
 /// When decoding an optional item, i.e. a `Null` value has to be
@@ -245,6 +246,7 @@ impl fmt::Display for DecodeError {
             DecodeError::TooNested           => write!(f, "DecodeError: value is too nested"),
             DecodeError::UnexpectedEOF       => write!(f, "DecodeError: unexpected end-of-file"),
             DecodeError::UnexpectedBreak     => write!(f, "DecodeError: unexpected break"),
+            DecodeError::Other(ref e)        => write!(f, "DecodeError: other: {:?}", e),
             DecodeError::TooLong{max:m, actual:a} => write!(f, "DecodeError: value is too long {} (max={})", a, m),
             DecodeError::UnexpectedType{datatype:t, info:i} => write!(f, "DecodeError: unexpected type {:?} (info={})", t, i)
         }
@@ -253,13 +255,27 @@ impl fmt::Display for DecodeError {
 
 impl Error for DecodeError {
     fn description(&self) -> &str {
-        "DecodeError"
+        match *self {
+            DecodeError::DuplicateKey(_)    => "duplicate key in objects",
+            DecodeError::IntOverflow(_)     => "integer overflow",
+            DecodeError::InvalidKey(_)      => "invalid object key",
+            DecodeError::InvalidTag(_)      => "invalid tag",
+            DecodeError::InvalidUtf8(_)     => "invalid utf-8",
+            DecodeError::IoError(_)         => "i/o error",
+            DecodeError::TooNested          => "too deeply nested objects/arrays",
+            DecodeError::UnexpectedEOF      => "unexpected eof",
+            DecodeError::UnexpectedBreak    => "unexpected break",
+            DecodeError::Other(_)           => "other error",
+            DecodeError::TooLong{..}        => "value is too long",
+            DecodeError::UnexpectedType{..} => "unexpected type"
+        }
     }
 
     fn cause(&self) -> Option<&Error> {
         match *self {
             DecodeError::IoError(ref e)     => Some(e),
             DecodeError::InvalidUtf8(ref e) => Some(e),
+            DecodeError::Other(ref e)       => Some(&**e),
             _                               => None
         }
     }
@@ -1140,7 +1156,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
                     match self.decode_key(level - 1) {
                         Ok(key) => {
                             if m.contains_key(&key) {
-                                return Err(DecodeError::DuplicateKey(Box::new(key)))
+                                return Err(DecodeError::DuplicateKey(key))
                             }
                             match try!(self.decode_value(level - 1)) {
                                 Value::Break => return Err(DecodeError::UnexpectedBreak),
@@ -1163,7 +1179,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
                 for _ in 0 .. n {
                     let key = try!(self.decode_key(level - 1));
                     if m.contains_key(&key) {
-                        return Err(DecodeError::DuplicateKey(Box::new(key)))
+                        return Err(DecodeError::DuplicateKey(key))
                     }
                     m.insert(key, try!(self.decode_value(level - 1)));
                 }
