@@ -13,13 +13,12 @@ extern crate test;
 use cbor::random::gen_value;
 use cbor::{Config, GenericDecoder, GenericEncoder};
 use quickcheck::StdGen;
-use rand::thread_rng;
+use rand::chacha::ChaChaRng;
 use std::io::Cursor;
-use std::vec::Vec;
 use test::Bencher;
 
 fn mk_value(min: usize) -> Vec<u8> {
-    let mut g = StdGen::new(thread_rng(), 255);
+    let mut g = StdGen::new(ChaChaRng::new_unseeded(), 255);
     let mut e = GenericEncoder::new(Cursor::new(Vec::new()));
     e.borrow_mut().array(min).unwrap();
     for _ in 0 .. min {
@@ -35,7 +34,4 @@ fn random_value_roundtrip(b: &mut Bencher) {
         assert!(GenericDecoder::new(Config::default(), &mut w).value().ok().is_some());
         w.set_position(0);
     });
-    let m = w.get_ref().len() as f64 / 1048576.0;
-    let s = b.ns_per_iter() as f64 * 0.000000001;
-    println!("{:.3} MB/s", m/s)
 }
