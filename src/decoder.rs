@@ -570,6 +570,29 @@ impl<R: ReadBytesExt> Kernel<R> {
         Ok(v)
     }
 
+    /// Read `begin` as the length and read that many raw bytes into `buf`.
+    ///
+    /// If length is greater than the given buffer, `DecodeError::TooLong`
+    /// is returned instead.
+    pub fn read_raw_data(&mut self, begin: u8, buf: &mut [u8]) -> DecodeResult<usize> {
+        let len = self.unsigned(begin)?;
+        if len > buf.len() as u64 {
+            return Err(DecodeError::TooLong { max: buf.len(), actual: len })
+        }
+        let n = len as usize;
+        let mut i = 0;
+        while i < n {
+            match self.reader.read(&mut buf[i..]) {
+                Ok(0)  => return Err(DecodeError::UnexpectedEOF),
+                Ok(j)  => i += j,
+                Err(e) =>
+                    if e.kind() != io::ErrorKind::Interrupted {
+                        return Err(DecodeError::IoError(e))
+                    }
+            }
+        }
+        Ok(n)
+    }
 }
 
 impl<R: ReadBytesExt + ReadSlice> Kernel<R> {
@@ -679,6 +702,21 @@ impl<R: ReadBytesExt> Decoder<R> {
 
     pub fn f64(&mut self) -> DecodeResult<f64> {
         self.typeinfo().and_then(|ti| self.kernel.f64(&ti))
+    }
+
+    /// Decode a single byte string into the given buffer.
+    ///
+    /// The provided buffer must be large enough to hold the entire
+    /// byte string, otherwise an error is returned.
+    ///
+    /// Please note that indefinite byte strings are not supported by this
+    /// method (Consider using `Decoder::bytes_iter()` for this use-case).
+    pub fn read_bytes(&mut self, b: &mut [u8]) -> DecodeResult<usize> {
+        match self.typeinfo()? {
+            (Type::Bytes, 31) => unexpected_type(&(Type::Bytes, 31)),
+            (Type::Bytes,  i) => self.kernel.read_raw_data(i, b),
+            ti                => unexpected_type(&ti)
+        }
     }
 
     /// Decode a single byte string.
@@ -1347,6 +1385,13 @@ mod tests {
     #[test]
     fn bytes() {
         assert_eq!(Some(vec![1,2,3,4]), decoder("4401020304").bytes().ok())
+    }
+
+    #[test]
+    fn read_bytes() {
+        let mut buf = [0u8; 4];
+        assert_eq!(Some(4), decoder("4401020304").read_bytes(&mut buf).ok());
+        assert_eq!([1,2,3,4], buf)
     }
 
     #[test]
