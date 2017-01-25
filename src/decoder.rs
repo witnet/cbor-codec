@@ -887,7 +887,13 @@ impl<R: ReadBytesExt + Skip> Decoder<R> {
                 Ok(true)
             }
             (Type::Object, a) => {
-                let n = 2 * try!(self.kernel.unsigned(a));
+                let n = try!(self.kernel.unsigned(a));
+                // n == number of fields => need to skip over keys and values.
+                // Instead of doubling n we loop twice in order to avoid
+                // overflowing n.
+                for _ in 0 .. n {
+                    try!(self.skip_value(level - 1));
+                }
                 for _ in 0 .. n {
                     try!(self.skip_value(level - 1));
                 }
