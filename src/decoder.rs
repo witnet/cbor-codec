@@ -504,7 +504,7 @@ impl<R: ReadBytesExt> Kernel<R> {
         match ti.0 {
             Type::Float16 => {
                 // Copied from RFC 7049 Appendix D:
-                let half  = try!(self.reader.read_u16::<BigEndian>());
+                let half  = self.reader.read_u16::<BigEndian>()?;
                 let exp   = half >> 10 & 0x1F;
                 let mant  = half & 0x3FF;
                 let value = match exp {
@@ -550,7 +550,7 @@ impl<R: ReadBytesExt> Kernel<R> {
     /// If length is greater than the given `max_len`, `DecodeError::TooLong`
     /// is returned instead.
     pub fn raw_data(&mut self, begin: u8, max_len: usize) -> DecodeResult<Vec<u8>> {
-        let len = try!(self.unsigned(begin));
+        let len = self.unsigned(begin)?;
         if len > max_len as u64 {
             return Err(DecodeError::TooLong { max: max_len, actual: len })
         }
@@ -570,6 +570,29 @@ impl<R: ReadBytesExt> Kernel<R> {
         Ok(v)
     }
 
+    /// Read `begin` as the length and read that many raw bytes into `buf`.
+    ///
+    /// If length is greater than the given buffer, `DecodeError::TooLong`
+    /// is returned instead.
+    pub fn read_raw_data(&mut self, begin: u8, buf: &mut [u8]) -> DecodeResult<usize> {
+        let len = self.unsigned(begin)?;
+        if len > buf.len() as u64 {
+            return Err(DecodeError::TooLong { max: buf.len(), actual: len })
+        }
+        let n = len as usize;
+        let mut i = 0;
+        while i < n {
+            match self.reader.read(&mut buf[i..]) {
+                Ok(0)  => return Err(DecodeError::UnexpectedEOF),
+                Ok(j)  => i += j,
+                Err(e) =>
+                    if e.kind() != io::ErrorKind::Interrupted {
+                        return Err(DecodeError::IoError(e))
+                    }
+            }
+        }
+        Ok(n)
+    }
 }
 
 impl<R: ReadBytesExt + ReadSlice> Kernel<R> {
@@ -578,7 +601,7 @@ impl<R: ReadBytesExt + ReadSlice> Kernel<R> {
     /// If length is greater than the given `max_len`, `DecodeError::TooLong`
     /// is returned instead.
     pub fn raw_slice(&mut self, begin: u8, max_len: usize) -> DecodeResult<&[u8]> {
-        let len = try!(self.unsigned(begin));
+        let len = self.unsigned(begin)?;
         if len > max_len as u64 {
             return Err(DecodeError::TooLong { max: max_len, actual: len })
         }
@@ -681,12 +704,27 @@ impl<R: ReadBytesExt> Decoder<R> {
         self.typeinfo().and_then(|ti| self.kernel.f64(&ti))
     }
 
+    /// Decode a single byte string into the given buffer.
+    ///
+    /// The provided buffer must be large enough to hold the entire
+    /// byte string, otherwise an error is returned.
+    ///
+    /// Please note that indefinite byte strings are not supported by this
+    /// method (Consider using `Decoder::bytes_iter()` for this use-case).
+    pub fn read_bytes(&mut self, b: &mut [u8]) -> DecodeResult<usize> {
+        match self.typeinfo()? {
+            (Type::Bytes, 31) => unexpected_type(&(Type::Bytes, 31)),
+            (Type::Bytes,  i) => self.kernel.read_raw_data(i, b),
+            ti                => unexpected_type(&ti)
+        }
+    }
+
     /// Decode a single byte string.
     ///
     /// Please note that indefinite byte strings are not supported by this
     /// method (Consider using `Decoder::bytes_iter()` for this use-case).
     pub fn bytes(&mut self) -> DecodeResult<Vec<u8>> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Bytes, 31) => unexpected_type(&(Type::Bytes, 31)),
             (Type::Bytes,  i) => {
                 let max = self.config.max_len_bytes;
@@ -698,7 +736,7 @@ impl<R: ReadBytesExt> Decoder<R> {
 
     /// Decode an indefinite byte string.
     pub fn bytes_iter(&mut self) -> DecodeResult<BytesIter<R>> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Bytes, 31) => Ok(BytesIter { decoder: self }),
             ti                => unexpected_type(&ti)
         }
@@ -709,11 +747,11 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// Please note that indefinite strings are not supported by this method
     /// (Consider using `Decoder::text_iter()` for this use-case).
     pub fn text(&mut self) -> DecodeResult<String> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Text, 31) => unexpected_type(&(Type::Text, 31)),
             (Type::Text,  i) => {
                 let max  = self.config.max_len_text;
-                let data = try!(self.kernel.raw_data(i, max));
+                let data = self.kernel.raw_data(i, max)?;
                 String::from_utf8(data).map_err(From::from)
             }
             ti => unexpected_type(&ti)
@@ -722,7 +760,7 @@ impl<R: ReadBytesExt> Decoder<R> {
 
     /// Decode an indefinite string.
     pub fn text_iter(&mut self) -> DecodeResult<TextIter<R>> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Text, 31) => Ok(TextIter { decoder: self }),
             ti               => unexpected_type(&ti)
         }
@@ -731,7 +769,7 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// Decode a `Tag`.
     /// If no tag is found an `UnexpectedType` error is returned.
     pub fn tag(&mut self) -> DecodeResult<Tag> {
-        match try!(self.kernel.typeinfo()) {
+        match self.kernel.typeinfo()? {
             (Type::Tagged, i) => self.kernel.unsigned(i).map(Tag::of),
             ti                => unexpected_type(&ti)
         }
@@ -743,10 +781,10 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// Please note that indefinite arrays are not supported by this method
     /// (Consider using `Decoder::array_begin()` for this use-case).
     pub fn array(&mut self) -> DecodeResult<usize> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Array, 31) => unexpected_type(&(Type::Array, 31)),
             (Type::Array,  a) => {
-                let len = try!(self.kernel.unsigned(a));
+                let len = self.kernel.unsigned(a)?;
                 if len > self.config.max_len_array as u64 {
                     return Err(DecodeError::TooLong { max: self.config.max_len_array, actual: len })
                 }
@@ -763,7 +801,7 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// (Consider using `or_break` around every decoding step within an
     /// indefinite array to handle this case).
     pub fn array_begin(&mut self) -> DecodeResult<()> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Array, 31) => Ok(()),
             ti                => unexpected_type(&ti)
         }
@@ -775,10 +813,10 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// Please note that indefinite objects are not supported by this method
     /// (Consider using `Decoder::object_begin` for this use-case).
     pub fn object(&mut self) -> DecodeResult<usize> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Object, 31) => unexpected_type(&(Type::Object, 31)),
             (Type::Object,  a) => {
-                let len = try!(self.kernel.unsigned(a));
+                let len = self.kernel.unsigned(a)?;
                 if len > self.config.max_size_map as u64 {
                     return Err(DecodeError::TooLong { max: self.config.max_size_map, actual: len })
                 }
@@ -795,7 +833,7 @@ impl<R: ReadBytesExt> Decoder<R> {
     /// (Consider using `or_break` around every decoding step within an
     /// indefinite object to handle this case).
     pub fn object_begin(&mut self) -> DecodeResult<()> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Object, 31) => Ok(()),
             ti                 => unexpected_type(&ti)
         }
@@ -807,7 +845,7 @@ impl<R: ReadBytesExt> Decoder<R> {
             if level == 0 {
                 return Err(DecodeError::TooNested)
             }
-            match try!(d.kernel.typeinfo()) {
+            match d.kernel.typeinfo()? {
                 (Type::Tagged, i) => d.kernel.unsigned(i).and(go(d, level - 1)),
                 ti                => Ok(ti)
             }
@@ -834,7 +872,7 @@ impl<R: ReadBytesExt + Skip> Decoder<R> {
         if level == 0 {
             return Err(DecodeError::TooNested)
         }
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::UInt8, n)     => self.kernel.unsigned(n).and(Ok(true)),
             (Type::UInt16, n)    => self.kernel.unsigned(n).and(Ok(true)),
             (Type::UInt32, n)    => self.kernel.unsigned(n).and(Ok(true)),
@@ -848,48 +886,54 @@ impl<R: ReadBytesExt + Skip> Decoder<R> {
             (Type::Undefined, _) => Ok(true),
             (Type::Break, _)     => Ok(false),
             (Type::Float16, _)   => {
-                try!(self.kernel.reader.skip(2));
+                self.kernel.reader.skip(2)?;
                 Ok(true)
             }
             (Type::Float32, _) => {
-                try!(self.kernel.reader.skip(4));
+                self.kernel.reader.skip(4)?;
                 Ok(true)
             }
             (Type::Float64, _) => {
-                try!(self.kernel.reader.skip(8));
+                self.kernel.reader.skip(8)?;
                 Ok(true)
             }
             (Type::Bytes, 31) => self.skip_until_break(Type::Bytes).and(Ok(true)),
             (Type::Bytes, a)  => {
-                let n = try!(self.kernel.unsigned(a));
-                try!(self.kernel.reader.skip(n));
+                let n = self.kernel.unsigned(a)?;
+                self.kernel.reader.skip(n)?;
                 Ok(true)
             }
             (Type::Text, 31) => self.skip_until_break(Type::Text).and(Ok(true)),
             (Type::Text, a)  => {
-                let n = try!(self.kernel.unsigned(a));
-                try!(self.kernel.reader.skip(n));
+                let n = self.kernel.unsigned(a)?;
+                self.kernel.reader.skip(n)?;
                 Ok(true)
             }
             (Type::Array, 31) => {
-                while try!(self.skip_value(level - 1)) {}
+                while self.skip_value(level - 1)? {}
                 Ok(true)
             }
             (Type::Object, 31) => {
-                while try!(self.skip_value(level - 1)) {}
+                while self.skip_value(level - 1)? {}
                 Ok(true)
             }
             (Type::Array, a) => {
-                let n = try!(self.kernel.unsigned(a));
+                let n = self.kernel.unsigned(a)?;
                 for _ in 0 .. n {
-                    try!(self.skip_value(level - 1));
+                    self.skip_value(level - 1)?;
                 }
                 Ok(true)
             }
             (Type::Object, a) => {
-                let n = 2 * try!(self.kernel.unsigned(a));
+                let n = self.kernel.unsigned(a)?;
+                // n == number of fields => need to skip over keys and values.
+                // Instead of doubling n we loop twice in order to avoid
+                // overflowing n.
                 for _ in 0 .. n {
-                    try!(self.skip_value(level - 1));
+                    self.skip_value(level - 1)?;
+                }
+                for _ in 0 .. n {
+                    self.skip_value(level - 1)?;
                 }
                 Ok(true)
             }
@@ -903,15 +947,15 @@ impl<R: ReadBytesExt + Skip> Decoder<R> {
     // Skip over `Text` or `Bytes` until a `Break` is encountered.
     fn skip_until_break(&mut self, ty: Type) -> DecodeResult<()> {
         loop {
-            let (t, a) = try!(self.typeinfo());
+            let (t, a) = self.typeinfo()?;
             if t == Type::Break {
                 break
             }
             if t != ty || a == 31 {
                 return unexpected_type(&(t, a))
             }
-            let n = try!(self.kernel.unsigned(a));
-            try!(self.kernel.reader.skip(n))
+            let n = self.kernel.unsigned(a)?;
+            self.kernel.reader.skip(n)?
         }
         Ok(())
     }
@@ -923,11 +967,11 @@ impl<R: ReadBytesExt + ReadSlice> Decoder<R> {
     ///
     /// Please note that indefinite strings are not supported by this method.
     pub fn text_borrow(&mut self) -> DecodeResult<&str> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Text, 31) => unexpected_type(&(Type::Text, 31)),
             (Type::Text,  i) => {
                 let max  = self.config.max_len_text;
-                let data = try!(self.kernel.raw_slice(i, max));
+                let data = self.kernel.raw_slice(i, max)?;
                 from_utf8(data).map_err(From::from)
             }
             ti => unexpected_type(&ti)
@@ -940,7 +984,7 @@ impl<R: ReadBytesExt + ReadSlice> Decoder<R> {
     /// Please note that indefinite byte strings are not supported by this
     /// method.
     pub fn bytes_borrow(&mut self) -> DecodeResult<&[u8]> {
-        match try!(self.typeinfo()) {
+        match self.typeinfo()? {
             (Type::Bytes, 31) => unexpected_type(&(Type::Bytes, 31)),
             (Type::Bytes,  i) => {
                 let max = self.config.max_len_bytes;
@@ -1024,7 +1068,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
         if level == 0 {
             return Err(DecodeError::TooNested)
         }
-        match try!(self.decoder.kernel.typeinfo()) {
+        match self.decoder.kernel.typeinfo()? {
             ti@(Type::UInt8, _)   => self.decoder.kernel.u8(&ti).map(Value::U8),
             ti@(Type::UInt16, _)  => self.decoder.kernel.u16(&ti).map(Value::U16),
             ti@(Type::UInt32, _)  => self.decoder.kernel.u32(&ti).map(Value::U32),
@@ -1114,7 +1158,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
             }
             (Type::Text, a) => {
                 let max  = self.decoder.config.max_len_text;
-                let data = try!(self.decoder.kernel.raw_data(a, max));
+                let data = self.decoder.kernel.raw_data(a, max)?;
                 String::from_utf8(data).map(|x| Value::Text(Text::Text(x))).map_err(From::from)
             }
             (Type::Array, 31) => { // indefinite length array
@@ -1134,14 +1178,14 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
                 Ok(Value::Array(v))
             }
             (Type::Array, a) => {
-                let len = try!(self.decoder.kernel.unsigned(a));
+                let len = self.decoder.kernel.unsigned(a)?;
                 if len > self.decoder.config.max_len_array as u64 {
                     return Err(DecodeError::TooLong { max: self.decoder.config.max_len_array, actual: len })
                 }
                 let n = len as usize;
                 let mut v = Vec::with_capacity(n);
                 for _ in 0 .. n {
-                    v.push(try!(self.decode_value(level - 1)));
+                    v.push(self.decode_value(level - 1)?);
                 }
                 Ok(Value::Array(v))
             }
@@ -1158,7 +1202,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
                             if m.contains_key(&key) {
                                 return Err(DecodeError::DuplicateKey(key))
                             }
-                            match try!(self.decode_value(level - 1)) {
+                            match self.decode_value(level - 1)? {
                                 Value::Break => return Err(DecodeError::UnexpectedBreak),
                                 value        => { m.insert(key, value); }
                             }
@@ -1170,27 +1214,27 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
                 Ok(Value::Map(m))
             }
             (Type::Object, a) => {
-                let len = try!(self.decoder.kernel.unsigned(a));
+                let len = self.decoder.kernel.unsigned(a)?;
                 if len > self.decoder.config.max_size_map as u64 {
                     return Err(DecodeError::TooLong { max: self.decoder.config.max_size_map, actual: len })
                 }
                 let n = len as usize;
                 let mut m = BTreeMap::new();
                 for _ in 0 .. n {
-                    let key = try!(self.decode_key(level - 1));
+                    let key = self.decode_key(level - 1)?;
                     if m.contains_key(&key) {
                         return Err(DecodeError::DuplicateKey(key))
                     }
-                    m.insert(key, try!(self.decode_value(level - 1)));
+                    m.insert(key, self.decode_value(level - 1)?);
                 }
                 Ok(Value::Map(m))
             }
             (Type::Tagged, a) => {
-                let tag = try!(self.decoder.kernel.unsigned(a).map(Tag::of));
+                let tag = self.decoder.kernel.unsigned(a).map(Tag::of)?;
                 if self.decoder.config.skip_tags {
                     return self.decode_value(level - 1)
                 }
-                let val = try!(self.decode_value(level - 1).map(|v| Value::Tagged(tag, Box::new(v))));
+                let val = self.decode_value(level - 1).map(|v| Value::Tagged(tag, Box::new(v)))?;
                 if self.decoder.config.check_tags && !value::check(&val) {
                     return Err(DecodeError::InvalidTag(val))
                 }
@@ -1203,7 +1247,7 @@ impl<R: ReadBytesExt> GenericDecoder<R> {
     }
 
     fn decode_key(&mut self, level: usize) -> DecodeResult<Key> {
-        match try!(self.decode_value(level)) {
+        match self.decode_value(level)? {
             Value::Bool(x)  => Ok(Key::Bool(x)),
             Value::Bytes(x) => Ok(Key::Bytes(x)),
             Value::Text(x)  => Ok(Key::Text(x)),
@@ -1341,6 +1385,13 @@ mod tests {
     #[test]
     fn bytes() {
         assert_eq!(Some(vec![1,2,3,4]), decoder("4401020304").bytes().ok())
+    }
+
+    #[test]
+    fn read_bytes() {
+        let mut buf = [0u8; 4];
+        assert_eq!(Some(4), decoder("4401020304").read_bytes(&mut buf).ok());
+        assert_eq!([1,2,3,4], buf)
     }
 
     #[test]
