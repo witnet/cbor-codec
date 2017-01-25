@@ -66,7 +66,7 @@ impl Type {
     }
 
     pub fn read<R: ReadBytesExt>(r: &mut R) -> Result<(Type, u8), Error> {
-        let b = try!(r.read_u8());
+        let b = r.read_u8()?;
         match ((b & 0b111_00000) >> 5, b & 0b000_11111) {
             (0, a @ 0...24)  => Ok((Type::UInt8, a)),
             (0, 25)          => Ok((Type::UInt16, 25)),
@@ -86,7 +86,7 @@ impl Type {
             (7, 21)          => Ok((Type::Bool, 21)),
             (7, 22)          => Ok((Type::Null, 22)),
             (7, 23)          => Ok((Type::Undefined, 23)),
-            (7, 24)          => match try!(r.read_u8()) {
+            (7, 24)          => match r.read_u8()? {
                 a @ 0...31 => Ok((Type::Reserved { major: 7, info: a }, a)),
                 a          => Ok((Type::Unassigned { major: 7, info: a }, a))
             },
