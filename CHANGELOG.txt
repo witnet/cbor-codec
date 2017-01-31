@@ -1,3 +1,7 @@
+0.7.1
+-----
+- Add `categories` to Cargo.toml
+
 0.7.0
 -----
 - Add `Decoder::read_bytes`.
