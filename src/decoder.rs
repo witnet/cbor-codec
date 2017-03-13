@@ -175,7 +175,7 @@ pub enum DecodeError {
     TooNested,
     /// The end of file has been encountered unexpectedly
     UnexpectedEOF,
-    /// And unexpected type has been encountered
+    /// An unexpected type has been encountered
     UnexpectedType { datatype: Type, info: u8 },
     /// A break was encountered at some unexpected point while
     /// decoding an indefinite object.
