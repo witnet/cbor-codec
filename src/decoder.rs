@@ -508,9 +508,9 @@ impl<R: ReadBytesExt> Kernel<R> {
                 let exp   = half >> 10 & 0x1F;
                 let mant  = half & 0x3FF;
                 let value = match exp {
-                    0  => ffi::c_ldexpf(mant as f32, -24),
+                    0  => math::ldexpf(mant as f32, -24),
                     31 => if mant == 0 { f32::INFINITY } else { f32::NAN },
-                    _  => ffi::c_ldexpf(mant as f32 + 1024.0, exp as isize - 25)
+                    _  => math::ldexpf(mant as f32 + 1024.0, exp as isize - 25)
                 };
                 Ok(if half & 0x8000 == 0 { value } else { - value })
             }
@@ -610,16 +610,61 @@ impl<R: ReadBytesExt + ReadSlice> Kernel<R> {
 }
 
 // Workaround to not require the currently unstable `f32::ldexp`:
-mod ffi {
-    use libc::c_int;
+mod math {
+    #[cfg(unix)]
+    pub mod ffi {
+        use libc::c_int;
 
-    extern {
-        pub fn ldexpf(x: f32, exp: c_int) -> f32;
+        extern {
+            pub fn ldexpf(x: f32, exp: c_int) -> f32;
+        }
     }
 
+    #[cfg(unix)]
     #[inline]
-    pub fn c_ldexpf(x: f32, exp: isize) -> f32 {
-        unsafe { ldexpf(x, exp as c_int) }
+    pub fn ldexpf(x: f32, exp: isize) -> f32 {
+        use libc::c_int;
+
+        unsafe { ffi::ldexpf(x, exp as c_int) }
+    }
+
+    /// Shim for supporting `ldexpf` on not-unix platforms (e.g. `windows-msvc`)
+    ///
+    /// Borrowed from [libm] under the terms of the [MIT License].
+    ///
+    /// [libm]: https://github.com/rust-lang/libm
+    /// [MIT License]: https://github.com/rust-lang/libm/blob/master/LICENSE-MIT
+    #[cfg(not(unix))]
+    #[inline]
+    pub fn ldexpf(x: f32, exp: isize) -> f32 {
+        let mut x = x;
+        let mut exp = exp;
+        let x1p127 = f32::from_bits(0x7f000000); // 0x1p127f === 2 ^ 127
+        let x1p_126 = f32::from_bits(0x800000); // 0x1p-126f === 2 ^ -126
+        let x1p24 = f32::from_bits(0x4b800000); // 0x1p24f === 2 ^ 24
+
+        if exp > 127 {
+            x *= x1p127;
+            exp -= 127;
+            if exp > 127 {
+                x *= x1p127;
+                exp -= 127;
+                if exp > 127 {
+                    exp = 127;
+                }
+            }
+        } else if exp < -126 {
+            x *= x1p_126 * x1p24;
+            exp += 126 - 24;
+            if exp < -126 {
+                x *= x1p_126 * x1p24;
+                exp += 126 - 24;
+                if exp < -126 {
+                    exp = -126;
+                }
+            }
+        }
+        x * f32::from_bits(((0x7f + exp) as u32) << 23)
     }
 }
 
